@@ -139,6 +139,7 @@ void *dead_lock()
 
             while(clientEmpty() == false)
             {
+                // Cuando el usuario tenga el control no sucedera nada, solo un mensaje de bienvenida promedio
                 if(verify_client() == false)
                 {
                     if(count == 1)
@@ -150,6 +151,7 @@ void *dead_lock()
                 } 
                 else 
                 {
+                // Cuando tome el control un cliente el usuario no podra hacer nada.
                     if(count == 0)
                     {
                         printf("*Mensaje de esperar en cola promedio*\n");
