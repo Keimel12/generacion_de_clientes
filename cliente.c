@@ -1,289 +1,389 @@
+#include <time.h>
 #include <stdio.h>
-#include <string.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <pthread.h>
-#include <time.h>
+
+#define NUM_THREAD 2
+#define LEN_STRING 250
+#define TIME_USER 600
+#define MAX_TIME 360
+#define MIN_TIME 240
+
+// Evitara conflictos al compartir recursos con nuestra variable global 'sec'.
+pthread_mutex_t mutexBloqueo;
+
+// Si no se realiza la compra mandar al final de la cola
+
+struct carrito
+{
+    // Hace referencia al tiempo que los clientes pasaran eligiendo productos
+    int time;
+    // Los productos que el usuario decidio comprar
+    char products[LEN_STRING];
+    // Enumera la cantidad de productos que estan en el carrito
+    int quantity_product;
+    // Si es verdadera entonces realizamos la compra a tiempo, de lo contrario, nos manda al final de la cola
+    bool completed_sale;
+    struct carrito *next;
+};
+struct carrito *after = NULL, *back = NULL;
+
+// Segundos de ejecucion
+unsigned int sec = 0;
 
 /*
-	Notas del creador :p
+            Notas del creador :)
 
-	1- La generacion de clientes son cada 4 a 6 min... pero legalmente como se generan
-	tambien deben ser capaces de eliminarse, aqui nace un problema y es que no tenemos
-	especificado el tiempo para eliminar el cliente. Entonces el tiempo que ocupara en 
-	generarse tambien sera el tiempo que tardara en eliminarse. Ez.
+    1- Las lineas 87 al 93 (que comentan la funcion pthread_join), normalmente no se 
+       comentarian, pues esa funcion se encarga de limpiar recursos al terminar un hilo.
+       pero en nuestro ya que los hilos se ejecutan indefinidamente, no es necesaria...
+       Y sobretodo porque no consumen mucha memoria los subprocesos que se estan ejecutando
 
-	2- Le dejo la funcion display_client() para que puedas ver el funcionamiento.
+    2- Las lineas 100 a 104 fueron usadas simulando un programa comun y corriente para
+       comprobar que tan bien se ejecutaban los subprocesos. (ciclo while donde pide ingresar
+       un numero).
+    
+    3- Las lineas 195 y 201 (ambas encerradas en comentarios), son usadas para comprobar
+       que la creacion de clientes se ejecutaba correctamente.
 
-	3- El condicional sec == 429000000 es usado para evitar un desbordamiento en el futuro
-	del programa... Aunque duraria como unos simples 136 años hasta que pase eso xd.
+    4- La funcion display_client() es puramente auxiliar y no sirve de nada en el programa
+       solo fue usada para comprobar que la creacion de clientes era sastifactoria...
+       PD: No fue borrada para que puedas comprobar el funcionamiento de ella.
 
-	4- Falta poner al usuario(nosotros) con un valor de true.
+    5- Cuando nos referimos a 'clientes' son elementos de la cola que son generados "aleatoriamente",
+       o de una forma mas entendible, serian el equivalente a personas desconocidas en frente o detras
+       de ti en una cola. Mientras que 'usuario' nos referimos a nosotros mismos.
 
-	5- .... Creo que seria todo 
+    6- Meencanta dejar estas notas de creador :]
+
+    7- Cualquier fallo contacte con la alcaldia de caroni :v
 */
 
+// Prototipos de funciones a usar
 
-struct cliente
-{
-	// Hace referencia al tiempo que los clientes pasaran eligiendo productos
-	int time;
-
-	// Separa a los clientes generados(con un valor de false), del usuario(con un valor de true)
-	bool is_i;
-	struct cliente *next;
-};
-
-struct cliente *after = NULL, *back = NULL;
-
-unsigned long int client_time(unsigned long int min_value, unsigned long int max_value, unsigned int rest_value);
-void generate_client();
-void generate_user();
+void *data_time();
+void *dead_lock();
+bool clientEmpty();
+bool verify_client();
 void display_client();
-void remove_client();
-void *subprocess();
 void decrease_time_client();
-int client_void();
+void generate_client(bool value);
+unsigned long int client_time(unsigned long int min_value, unsigned long int max_value, unsigned int rest_value);
 
-
-int main(void)
+int main(int argc, char const *argv[])
 {
-	int opcion;
+    // Ejecutamos un srand para tener disponibilidad de numeros pseudoaleatorios
+    srand(time(NULL));
+    // Haciendo uso de la libreria pthread.h, declaramos los hilos a usar
+    pthread_t hilo[NUM_THREAD];
+    int i;
+    int test;
 
-	pthread_t thread1;
-	pthread_create(&thread1, NULL, subprocess, NULL);
+    // Iniciamos un mutex para evitar complicaciones al ejecutar los subprocesos
+    pthread_mutex_init(&mutexBloqueo, NULL);
 
-	do
-	{
-		printf("- Presione '1' ver la cola\n");
-		printf("- Presione '2' para salir\n");
+    // Creamos los hilos
+    for (i = 0; i < NUM_THREAD; i++)
+    {
+        if(i % 2 == 0)
+        {
+            if(pthread_create(&hilo[i], NULL, &data_time, NULL) != 0)
+            {
+                perror("Error al crear el hilo");
+            }
+        } else {
+            if(pthread_create(&hilo[i], NULL, &dead_lock, NULL) != 0)
+            {
+                perror("Error al crear el hilo");
+            }         
+        }
+    }
 
-		scanf("%d", &opcion);
-		fflush(stdin);
+//    for (i = 0; i < NUM_THREAD; i++)
+//    {
+//        if(pthread_join(hilo[i], NULL) != 0)
+//        {
+//            perror("Error al unir el hilo");
+//        } 
+//    }
 
-		switch(opcion)
-		{
-			case 1:	display_client();
-					break;
-			case 2: printf("Haz salido del programa\n");
-					break;
-		}
+    while(1)
+    {
+        printf("ingrese un numero: \n");
+        scanf("%d", &test);
+    }
 
-	} while(opcion != 2);
-
-	return 0;
+    // Destruimos el mutex, ya que dejara de ser usado para este momento
+    pthread_mutex_destroy(&mutexBloqueo);
+    return 0;
 }
 
-/**************************************************************************************
-*	client_time():	Genera aleatoriamente el tiempo que tardaran los clientes en elegir
-*				  	sus productos en cola.
+/************************************************************************************
+* dead_lock: Se encargara de pausar la entrada de datos mientras no sea nuestro turno
+*            en la cola. (Subproceso).  
 *
+************************************************************************************/
+
+void *dead_lock()
+    {
+        struct timespec tiempo = {1, 0};
+        struct carrito *temp;
+        int count = 0;
+
+        while(1)
+        {
+            pthread_delay_np(&tiempo);
+
+            while(clientEmpty() == false)
+            {
+                if(verify_client() == false)
+                {
+                    if(count == 1)
+                    {
+                        printf("*Mensaje de bienvenida promedio*\n");     
+                    }
+                    fflush(stdin);
+                    count = 0;
+                } 
+                else 
+                {
+                    if(count == 0)
+                    {
+                        printf("*Mensaje de esperar en cola promedio*\n");
+                    }
+                    count = 1;
+                    getch();
+                }
+            }
+        }
+    }
+
+/********************************************************************************
+* verify_client(): Detectara cuando un usuario esta de regreso en la cola, ya que 
+*                  no pudo realizar la compra a tiempo.
+*
+********************************************************************************/
+
+
+bool verify_client()
+    {
+        struct carrito *temp;
+        temp = after;
+
+        if(temp -> completed_sale == false)
+        {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+/**********************************************************************************
+* data_time: Se encargara de contar los segundos que han pasado desde el inicio del
+*            programa y ejecutar las funciones necesarias. (Subproceso).
+*
+**********************************************************************************/
+
+void *data_time()
+    {
+        struct timespec tiempo = {1, 0};
+        struct carrito *temp;
+        generate_client(true); 
+
+        // En caso de que se igualen los valores, se creara un nuevo cliente
+        unsigned int contador_final = client_time(MIN_TIME, MAX_TIME, 0);
+        unsigned int contador_inicial = 0;
+
+        while(1)
+        {
+            pthread_delay_np(&tiempo);
+            sec++;
+            contador_inicial++;
+//            display_client();
+
+            if(contador_inicial == contador_final)
+            {
+                pthread_mutex_lock(&mutexBloqueo);
+                generate_client(false);
+//                system("cls");
+                contador_final = client_time(MIN_TIME, MAX_TIME, 0);
+                contador_inicial = 0;
+                pthread_mutex_unlock(&mutexBloqueo);
+            }
+            if(sec == TIME_USER)
+            {
+                printf("Se ha terminado su tiempo\n");
+            }
+
+            if(clientEmpty() == false)
+            {
+                pthread_mutex_lock(&mutexBloqueo); 
+                decrease_time_client();             
+                pthread_mutex_unlock(&mutexBloqueo); 
+            }
+        }
+    }
+
+/*******************************************************************************
+* ClientEmpty(): Permite determinar si la cola esta vacia, para evitar underflow
+*                Retorna 'true' si la cola esta vacia, de lo contrario 'false'.
+*******************************************************************************/
+
+bool clientEmpty()
+    {
+        struct carrito *temp;
+        temp = after;
+
+        if(after == NULL)
+        {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+/************************************************************************************
+* remove_client(): Permite remover el primer elemento de la cola, y en caso de que el
+*                  usuario se le acabe el tiempo y no pudo realizar su compra, lo
+*                  reinsertara en la cola.
+************************************************************************************/
+
+void remove_client()
+    {
+        struct carrito *temp;   
+        temp = after;
+
+        if(temp != NULL)
+        {
+            if(temp -> completed_sale == true)
+            {
+                after = after -> next;
+                free(temp);
+            } else {
+                after = after -> next;
+                generate_client(true);
+                free(temp);
+            }
+        } 
+        else {
+            after = NULL;
+            back = NULL;
+        }
+    }
+
+/*********************************************************************************
+* decrease_time_client(): Descontara el tiempo que transcurra del usuario mientras
+*                         no realice la compra de los productos. (En 1 segundo).
+*********************************************************************************/
+
+void decrease_time_client()
+    {
+        struct carrito *temp;
+        temp = after;
+    
+        if(temp->time != 0) 
+        {
+           temp->time = temp->time-1;
+
+            if((temp->time == 0) && (temp != NULL))
+            { 
+                remove_client();
+            }
+        }   
+        
+    }
+
+/**************************************************************************************
+* client_time(): Proporcionara un valor pseudoaleatorio al tiempo que los clientes
+*                podran transcurrir el realizar su compra.
+*
+*                   Argumentos
+*                   ----------
+*
+* [unsigned long int] min_value: El tiempo minimo que el cliente estara en la cola
+* [unsigned long int] max_value: El tiempo maximo que el cliente estara en la cola
+* [unsigned int] rest_value: Un valor que sera restado al tiempo para ser mas aleatorio
 **************************************************************************************/
 
 unsigned long int client_time(unsigned long int min_value, unsigned long int max_value, unsigned int rest_value)
-	{
-		// Almacenara el tiempo total.
-		int value = 0;
+    {
+        // Almacenara el tiempo total.
+        int value = 0;
 
-		// Generamos un valor aelatorio entre el max_time y min_time a traves de un rango 
-		value = (rand() % (max_value - min_value + 1)) + min_value;
-		
-		// Se resta con un valor establecido.
-		if(rest_value > 0)
-		{
-			value = value - rand() % rest_value;			
-		}
+        // Generamos un valor aelatorio entre el max_time y min_time a traves de un rango 
+        value = (rand() % (max_value - min_value + 1)) + min_value;
+        
+        // Se resta con un valor establecido.
+        if(rest_value > 0)
+        {
+            value = value - rand() % rest_value;            
+        }
 
-		return value;
-	}
+        return value;
+    }
 
-/******************************************************************
-* generate_client(): Genera un nuevo elemento en la cola (cliente)
-*					 el cual es incorporado.
-*
-******************************************************************/
-
-void generate_client()
-	{
-		// Es el plazo maximo de tiempo que tardaran en escoger sus productos y concretar la compra
-		unsigned short int max_time = 360;
-		// Es el plazo minimo de tiempo q ue tardaran en escoger sus productos y concretar la compra
-		unsigned short int min_time = 270;
-		unsigned short int rest_value = 30;
-
-
-		time_t t; 
-		srand((unsigned) time(&t));
-
-		struct cliente *aux;
-
-		// Reservamos memoria para el nodo
-		aux = malloc(sizeof(struct cliente));
-		aux->time = client_time(min_time, max_time, rest_value);
-		aux->is_i = false;
-		aux->next = NULL;
-		
-		if(back == NULL)
-		{ 
-			after = aux;
-			back = aux; 
-		}
-		else
-
-		back -> next = aux;
-		back = aux; 
-	}
-
+/***********************************************************************************
+* display_client(): Funcion completamente auxiliar que sera usada para demostrar que
+*                   las funciones se ejecutan correctamente... Al menos en esta pc 
+*   :]  :)  :p  :$  :v 
+***********************************************************************************/
 
 void display_client()
-	{
-		struct cliente *temp;
+    {
+        struct carrito *temp;
+        temp = after;
 
-		temp = after;
+        while(temp != NULL)
+        {
+            printf("[%d] [%d]\n", temp->time, temp->completed_sale);
+            temp = temp->next;
+        }
+    }   
 
-		while(temp != NULL)
-		{
-			printf("[%d] [%d]\n", temp->time, temp->is_i);
-			temp = temp->next;
-		}
-	}	
-
-/****************************************************************************
-* remove_client():	Se encarga de remover el cliente cuando ya paso su tiempo
-*					limite.
+/***********************************************************************************
+* generate_client(): Generara a los clientes y al usuario (en caso de no realizar la
+*                    la compra a tiempo) con su respectivo tiempo limite.
 *
-****************************************************************************/
-
-void remove_client()
-	{
-		struct cliente *temp;	
-
-		temp = after;
-
-		if(temp != NULL)
-		{
-			after = after -> next;
-			free(temp);
-		}
-
-		else
-		{
-			after = NULL;
-			back = NULL;
-		}
-	}
-
-void *subprocess()
-	{
-		// Es el plazo maximo de tiempo que tardaran en escoger sus productos y concretar la compra
-		unsigned short int max_time = 360;
-		// Es el plazo minimo de tiempo que tardaran en escoger sus productos y concretar la compra
-		unsigned short int min_time = 240;
-
-		struct timespec tiempo = {1 , 0};
-		struct cliente *temp;
-
-		unsigned int sec = 0;
-		unsigned int auxiliar = client_time(min_time, max_time, 0);
-		unsigned int auxiliar_contador = 0;
-
-		while(1)
-		{
-			pthread_delay_np(&tiempo);
-
-			++sec;
-			++auxiliar_contador;
-			temp = after;
-
-			if(auxiliar == auxiliar_contador)
-			{
-				printf("Se ha generado un elemento de cola nueva\n");
-				generate_client();
-				auxiliar = client_time(min_time, max_time, 0);
-				auxiliar_contador = 0;
-			}
-
-			if((sec % 600 == 0) && (temp->is_i == false))
-			{
-				printf("Se ha terminado su tiempo\n");
-				generate_user();
-			}	
-
-			if((temp != NULL) && (temp->is_i == false))
-			{
-				decrease_time_client();
-			}
-
-			// Evita que sec se desborde debido a su data type
-			if (sec == 429000000)
-			{
-				sec = 0;
-			}
-		}
-	}	
-
-/*************************************************************************************
-* decrease_time_client():	Cada vez que pase 1 segundo en el programa, se encarga de 
-*							disminuir un segundo al tiempo de los clientes.				
+*               Argumento
+*               ---------
 *
-*************************************************************************************/
+* [bool] value: En caso de ser 'true' significa que se creara un cliente, en caso
+*               contrario, es decir 'false' creara un usuario.
+***********************************************************************************/
 
+void generate_client(bool value)
+    {
+        unsigned short int rest_value = 0;
 
-void decrease_time_client()
-	{
-		struct cliente *temp;
-		temp = after;
-				
-		if(temp->time != 0) 
-		{
-			temp->time = temp->time-1;
+        struct carrito *temp;
 
-			if((temp->time == 0) && (client_void() == false))
-			{ 
-				printf("Se ha removido un elemento de cola\n");
-				remove_client();
-			}
-		}
-	}
+        // Reservamos memoria para el nodo
+        temp = malloc(sizeof(struct carrito));
+        
+        // Creacion del usuario
+        if(value == true)
+        {
+            temp->time = TIME_USER;
+            temp->completed_sale = false;
+        } 
+        // Creacion de clientes
+        if(value == false)
+        {
+            temp->time = client_time(MIN_TIME, MAX_TIME, rest_value);
+            temp->completed_sale = true;
+        }
+        temp->next = NULL;
+        
+        if(back == NULL)
+        { 
+            after = temp;
+            back = temp; 
+        }
+        else
 
-/*************************************************************************************
-* client_void(): Determina si la cola esta vacia(true) o hay elementos en ella(false).
-*	
-*************************************************************************************/
-
-
-int client_void()
-	{
-		if(after == NULL)
-		{
-			return true;
-		}
-		else
-			return false;
-	}
-
-/******************************************************************************************
-* generate_user(): 	Permite al usuario volver a la cola, despues de terminar los 10 minutos
-*					de su tiempo.
-*
-******************************************************************************************/
-
-void generate_user()
-	{
-		struct cliente *temp;
-
-		temp = malloc(sizeof(struct cliente));
-		temp->time = 40;
-		temp->is_i = true;
-		temp->next = NULL;
-		
-		if(back == NULL)
-		{ 
-			after = temp;
-			back = temp; 
-		}
-		else
-
-		back -> next = temp;
-		back = temp; 
-	 }
+        back -> next = temp;
+        back = temp; 
+    }
