@@ -135,28 +135,18 @@ void *dead_lock()
 
         while(1)
         {
-            pthread_delay_np(&tiempo);
 
             while(clientEmpty() == false)
             {
-                // Cuando el usuario tenga el control no sucedera nada, solo un mensaje de bienvenida promedio
+                // Cuando el usuario tenga el control no sucedera nada
                 if(verify_client() == false)
                 {
-                    if(count == 1)
-                    {
-                        printf("*Mensaje de bienvenida promedio*\n");     
-                    }
+                    pthread_delay_np(&tiempo);
                     fflush(stdin);
-                    count = 0;
                 } 
                 else 
                 {
                 // Cuando tome el control un cliente el usuario no podra hacer nada.
-                    if(count == 0)
-                    {
-                        printf("*Mensaje de esperar en cola promedio*\n");
-                    }
-                    count = 1;
                     getch();
                 }
             }
@@ -195,9 +185,9 @@ void *data_time()
         struct carrito *temp;
         generate_client(true); 
 
-        // En caso de que se igualen los valores, se creara un nuevo cliente
         unsigned int contador_final = client_time(MIN_TIME, MAX_TIME, 0);
         unsigned int contador_inicial = 0;
+        unsigned int count = 0;
 
         while(1)
         {
@@ -206,6 +196,7 @@ void *data_time()
             contador_inicial++;
 //            display_client();
 
+            // En caso de que se igualen los valores, se creara un nuevo cliente
             if(contador_inicial == contador_final)
             {
                 pthread_mutex_lock(&mutexBloqueo);
@@ -215,17 +206,40 @@ void *data_time()
                 contador_inicial = 0;
                 pthread_mutex_unlock(&mutexBloqueo);
             }
+
             if(sec == TIME_USER)
             {
                 printf("Se ha terminado su tiempo\n");
             }
 
+            // Disminuira el tiempo que el usuario tiene para realizar la compra
             if(clientEmpty() == false)
             {
                 pthread_mutex_lock(&mutexBloqueo); 
                 decrease_time_client();             
                 pthread_mutex_unlock(&mutexBloqueo); 
             }
+
+            // Si el usuario no le dio tiempo para hacer la compra, y ya es su turno
+            // para ralizar la compra, le saldra este mensaje.
+            if(verify_client() == false)
+            {
+                if(count == 1)
+                {
+                    printf("*Mensaje de bienvenida promedio*\n");     
+                    count = 0;
+                }
+            } 
+            else 
+            {
+                // Si el usuario no pudo realizar la compra a tiempo, le saldra este
+                // mensaje para hacerle saber que tiene que esperar su turno en la cola.
+                if(count == 0)
+                {
+                    printf("*Mensaje de esperar en cola promedio*\n");
+                    count = 1;
+                }
+            }            
         }
     }
 
